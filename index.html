@@ -6,7 +6,6 @@
     <meta name="viewport" content="width=device-width, height=device-height, initial-scale=1.0, user-scalable=no, shrink-to-fit=yes, viewport-fit=cover">
     <meta name="theme-color" content="#000000">
     <title>mySDK</title>
-    <script data-mysdk-id="vk-bridge" src="https://unpkg.com/@vkontakte/vk-bridge/dist/browser.min.js"></script>
     <style>
       html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #000; }
       #unity-root { position: fixed; inset: 0; background: #000; }
@@ -33,6 +32,7 @@
       var loading = document.querySelector("#mysdk-loading");
       var progressFill = document.querySelector("#mysdk-progress-fill");
       var warningBanner = document.querySelector("#unity-warning");
+      var vkBridgePromise = null;
 
       function unityShowBanner(msg, type) {
         var div = document.createElement("div");
@@ -45,6 +45,88 @@
           setTimeout(function () { warningBanner.removeChild(div); }, 5000);
         }
       }
+
+      function loadExternalScript(src, id, timeoutMs) {
+        var existing = document.querySelector("script[data-mysdk-id='" + id + "']");
+        if (existing && existing.getAttribute("data-mysdk-loaded") === "1") {
+          return Promise.resolve();
+        }
+
+        return new Promise(function (resolve, reject) {
+          var script = existing || document.createElement("script");
+          var completed = false;
+          var timeout = setTimeout(function () {
+            if (completed) {
+              return;
+            }
+
+            completed = true;
+            reject(new Error("Script load timeout: " + src));
+          }, timeoutMs || 8000);
+
+          script.onload = function () {
+            if (completed) {
+              return;
+            }
+
+            completed = true;
+            clearTimeout(timeout);
+            script.setAttribute("data-mysdk-loaded", "1");
+            resolve();
+          };
+
+          script.onerror = function () {
+            if (completed) {
+              return;
+            }
+
+            completed = true;
+            clearTimeout(timeout);
+            reject(new Error("Could not load script: " + src));
+          };
+
+          if (!existing) {
+            script.src = src;
+            script.async = true;
+            script.setAttribute("data-mysdk-id", id);
+            document.head.appendChild(script);
+          }
+        });
+      }
+
+      window.MySDKEnsureVkBridge = function () {
+        if (window.vkBridge || window.VKBridge || window.bridge) {
+          return Promise.resolve(window.vkBridge || window.VKBridge || window.bridge);
+        }
+
+        if (vkBridgePromise) {
+          return vkBridgePromise;
+        }
+
+        vkBridgePromise = loadExternalScript("https://unpkg.com/@vkontakte/vk-bridge/dist/browser.min.js", "vk-bridge", 8000)
+          .then(function () {
+            var bridge = window.vkBridge || window.VKBridge || window.bridge;
+            if (!bridge || !bridge.send) {
+              throw new Error("VK Bridge is not available after script load.");
+            }
+
+            return bridge.send("VKWebAppInit")
+              .catch(function () {
+                return {};
+              })
+              .then(function () {
+                return bridge;
+              });
+          })
+          .catch(function (error) {
+            console.warn("MySDK VK Bridge init failed:", error);
+            throw error;
+          });
+
+        return vkBridgePromise;
+      };
+
+      window.MySDKEnsureVkBridge().catch(function () {});
 
       window.addEventListener("contextmenu", function (event) { event.preventDefault(); });
       document.addEventListener("touchmove", function (event) { event.preventDefault(); }, { passive: false });
@@ -73,6 +155,9 @@
         }).catch(function (message) {
           unityShowBanner(message, "error");
         });
+      };
+      script.onerror = function () {
+        unityShowBanner("Could not load Unity loader: " + loaderUrl, "error");
       };
       document.body.appendChild(script);
     </script>
